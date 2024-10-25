@@ -5406,17 +5406,50 @@ class UserDefinedTritonKernel(ExternKernel):
         2. The arg is not tl.constexpr so we have to remove it
         """
         constexpr_indices_set = set(constexpr_indices)
+        REMOVED = object()
         raw_args = [
-            arg
-            for idx, arg in enumerate(raw_args)
+            (idx, arg)
             if (arg is not None) or (arg is None and idx in constexpr_indices_set)
+            else (idx, REMOVED)
+            for idx, arg in enumerate(raw_args)
         ]
+        removed_none_args = list(filter(lambda tup: tup[1] == REMOVED, raw_args))
+        removed_none_args = [idx for idx, val in removed_none_args]
+
+        raw_args = list(filter(lambda tup: tup[1] != REMOVED, raw_args))
+        raw_args = [val for idx, val in raw_args]
+
+        # We have to compute the constexpr indices for the new, filtered raw_args
+        # We also have to adjust equal_to_1.
+        eq1_indices_set = set(triton_meta["configs"][0].equal_to_1)
+        constexpr_indices = []
+        equal_to_1 = []
+        adjust = 0
+        for idx, kwarg in enumerate(self.ordered_kwargs_for_cpp_kernel):
+            # every time we encounter an idx we removed, adjust by one to account for it
+            # So for example if we had [None, const X]
+            # iter 1:
+            #   None was removed, adjust=1
+            # iter 2:
+            #  X is const at idx=1, but the adjusted idx is 0 now, because None was removed
+            if idx in removed_none_args:
+                adjust += 1
+                continue
+            if kernel.arg_names.index(kwarg) in kernel.constexprs:
+                constexpr_indices.append(idx - adjust)
+            if kernel.arg_names.index(kwarg) in eq1_indices_set:
+                equal_to_1.append(idx - adjust)
 
         # Call to kernel
         self.codegen_comment(wrapper)
-
         wrapper.generate_user_defined_triton_kernel(
-            new_name, raw_args, self.grid, configs, triton_meta, constexpr_indices
+            new_name,
+            raw_args,
+            self.grid,
+            configs,
+            triton_meta,
+            constexpr_indices,
+            equal_to_1,
         )
 
     def get_unbacked_symbol_uses(self) -> OrderedSet[sympy.Symbol]:

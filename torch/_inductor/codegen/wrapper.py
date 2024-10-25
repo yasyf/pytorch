@@ -821,6 +821,7 @@ class PythonWrapperCodegen(CodeGen):
         configs,
         triton_meta,
         constexprs,
+        equal_to_1,
     ):
         grid_fn, code = user_defined_kernel_grid_fn_code(
             kernel_name, configs, grid, wrapper=self
@@ -836,7 +837,12 @@ class PythonWrapperCodegen(CodeGen):
             for arg in raw_args
         ]
         self.generate_kernel_call(
-            kernel_name, args, grid_fn=grid_fn, arg_types=arg_types, raw_args=raw_args
+            kernel_name,
+            args,
+            grid_fn=grid_fn,
+            arg_types=arg_types,
+            raw_args=raw_args,
+            equal_to_1=equal_to_1,
         )
 
     def generate_tma_descriptor(self, desc):
@@ -1733,6 +1739,7 @@ class PythonWrapperCodegen(CodeGen):
         triton_meta=None,
         autotune_configs=None,
         grid_extra_kwargs="",
+        equal_to_1=None,
     ):
         """
         Generates kernel call code.

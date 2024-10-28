@@ -986,3 +986,47 @@ class CppWrapperCpuArrayRef(CppWrapperCpu):
             return f"{var_name}, {len(val)}"
 
         return self.val_to_arg_str_for_prim_type(val, type_)
+
+    def codegen_tensor_item(
+        self, dtype: torch.dtype, tensor: str, scalar: str, indented_buffer=None
+    ):
+        dtype_str = str(dtype).split(".")[-1]
+        writer = indented_buffer or self
+
+        if dtype == torch.float16 or dtype == torch.bfloat16:
+            scalar_tmp = f"{scalar}_tmp"
+            writer.writeline(f"{DTYPE_TO_CPP[dtype]} {scalar_tmp};")
+
+            # need convert_arrayref_tensor_to_tensor for ArrayRefTensors
+            tensor = f"convert_arrayref_tensor_to_tensor({tensor})"
+
+            writer.writeline(
+                f"AOTI_TORCH_ERROR_CODE_CHECK(aoti_torch_item_{dtype_str}({tensor}, &{scalar_tmp}));"
+            )
+            writer.writeline(f"float {scalar} = float({scalar_tmp});")
+        else:
+            writer.writeline(f"{DTYPE_TO_CPP[dtype]} {scalar};")
+
+            # need convert_arrayref_tensor_to_tensor for ArrayRefTensors
+            tensor = f"convert_arrayref_tensor_to_tensor({tensor})"
+
+            writer.writeline(
+                f"AOTI_TORCH_ERROR_CODE_CHECK(aoti_torch_item_{dtype_str}({tensor}, &{scalar}));"
+            )
+
+    def create_tmp_raii_handle_var(self, base_handle):
+        if base_handle.startswith(
+            (
+                "convert_arrayref_tensor_to_tensor",
+                "wrap_with_raii_handle_if_needed",
+            )
+        ):
+            # wrap_with_raii_handle_if_needed creates a temp RAIIAtenTensorHandle, so we need to
+            # explicitly store it. Otherwise, it will be destroyed before the fallback kernel call.
+            tmp_var_name = f"var_{next(self.arg_var_id)}"
+            return (
+                tmp_var_name,
+                f"RAIIAtenTensorHandle {tmp_var_name} = {base_handle};\n",
+            )
+        else:
+            return "", ""

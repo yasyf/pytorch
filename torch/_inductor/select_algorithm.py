@@ -28,6 +28,7 @@ from torch._dynamo.utils import counters, identity, preserve_rng_state
 
 from . import config, ir
 from .autotune_process import (
+    AutotuneInputs,
     TensorMeta,
     TritonBenchmarkRequest,
     TritonCPUBenchmarkRequest,
@@ -912,9 +913,9 @@ class TritonTemplateCaller(ir.TritonTemplateCallerBase):
         self.mutated_inputs = mutated_inputs
         self.workspace_arg = workspace_arg
 
-    def benchmark(self, *args, out):
+    def benchmark(self, *args, out, workspace: Optional[torch.Tensor] = None):
         assert self.bmreq is not None
-        return self.bmreq.benchmark(*args, output_tensor=out)
+        return self.bmreq.benchmark(*args, output_tensor=out, workspace=workspace)
 
     def precompile(self):
         assert self.bmreq is not None
@@ -983,7 +984,7 @@ class ExternKernelCaller(ChoiceCaller):
     def __str__(self) -> str:
         return f"ExternKernelCaller({self.choice.call_name()})"
 
-    def benchmark(self, *args, out):
+    def benchmark(self, *args, out, workspace: Optional[torch.Tensor] = None):
         if out.numel() == 0:
             # no need to run the kerrnel of do benchmarking
             return 0.0
@@ -1094,7 +1095,10 @@ class DataProcessorChoiceCallerWrapper:
     def __getattr__(self, name):
         return getattr(self._wrapped, name)
 
-    def benchmark(self, *args, out) -> float:
+    def benchmark(self, *args, out, workspace: Optional[torch.Tensor]) -> float:
+        assert (
+            workspace is None
+        ), "DataProcessorChoiceCallerWrapper does not support workspace"
         new_args, new_out = self._preprocessor(args, out)
         result = self._wrapped.benchmark(*new_args, out=new_out)
         new_out = self._postprocessor(new_out)
@@ -1461,7 +1465,9 @@ class AlgorithmSelectorCache(PersistentCache):
         if input_gen_fns is None:
             input_gen_fns = {}
 
-        def get_inputs(choices: List[ChoiceCaller]):
+        def get_inputs(
+            choices: Union[List[ExternKernelCaller], List[TritonTemplateCaller]]
+        ) -> AutotuneInputs:
             # de-duplicate args
             unique_example_inputs = {
                 x.get_name(): input_gen_fns.get(i, cls.benchmark_example_value)(x)
@@ -1501,6 +1507,7 @@ class AlgorithmSelectorCache(PersistentCache):
             needs_workspace = any(
                 choice.workspace_arg is not None for choice in triton_templates_choices
             )
+            workspace_tensor = None
             if needs_workspace:
                 # TODO right now we only support the same workspace arg for all choices
                 # TODO 2 Currently we not benchmark the workspace creation time
@@ -1522,14 +1529,20 @@ class AlgorithmSelectorCache(PersistentCache):
                 )
                 if zero_mode == WorkspaceZeroMode.ZERO_ON_CALL:
                     workspace_tensor.zero_()
-                example_inputs.append(workspace_tensor)
 
             expected = None
             if VERIFY:
                 choices[0].benchmark(*example_inputs_extern, out=out_extern)
                 expected = out_extern.clone()
 
-            return example_inputs, example_inputs_extern, out, out_extern, expected
+            return AutotuneInputs.from_separate_inputs(
+                example_inputs,
+                example_inputs_extern,
+                out,
+                out_extern,
+                expected,
+                workspace_tensor,
+            )
 
         if DEBUG:
             print(f"{len(choices)} tuning requests:")
@@ -1550,28 +1563,28 @@ class AlgorithmSelectorCache(PersistentCache):
             return "\n".join(lines)
 
         def benchmark_choice_in_current_process(
-            choice, example_inputs, example_inputs_extern, out, out_extern, expected
-        ):
-            out.zero_()
-            if isinstance(choice, ExternKernelCaller):
-                # aten kernels want the offset baked in for sliced tensors
-                result = choice.benchmark(*example_inputs_extern, out=out_extern)
-            else:
-                # triton templates want the base pointer for sliced tensors
-                result = choice.benchmark(*example_inputs, out=out)
-            if VERIFY and expected is not None:
-                torch.testing.assert_close(out_extern, expected, **VERIFY)
+            choice: ChoiceCaller, autotune_inputs: AutotuneInputs
+        ) -> float:
+            is_extern = isinstance(choice, ExternKernelCaller)
+            input_set = autotune_inputs.get_input_set(is_extern)
+            inpts, output, workspace = input_set.unpack()
+            workspace_arg = workspace if not is_extern else None
+            output.zero_()
+            result = choice.benchmark(*inpts, out=output, workspace=workspace_arg)
+            if VERIFY and autotune_inputs.expected is not None:
+                autotune_inputs.verify(**VERIFY)
             if torch.cuda.is_available():
                 torch.cuda.synchronize()  # shake out any CUDA errors
             return result
 
-        def benchmark_in_current_process(choices):
+        def benchmark_in_current_process(
+            choices: Union[List[ExternKernelCaller], List[TritonTemplateCaller]],
+        ) -> Dict[Union[ExternKernelCaller, TritonTemplateCaller], float]:
             inputs = get_inputs(choices)
-            example_inputs, _, out, _, _ = inputs
             timings = {}
             for choice in choices:
                 try:
-                    timing = benchmark_choice_in_current_process(choice, *inputs)
+                    timing = benchmark_choice_in_current_process(choice, inputs)
                 except CUDACompileError as e:
                     log.error(
                         "CUDA compilation error during autotuning: \n%s. \nIgnoring this choice.",
@@ -1613,7 +1626,9 @@ class AlgorithmSelectorCache(PersistentCache):
 
             return timings
 
-        def benchmark_in_sub_process(choices):
+        def benchmark_in_sub_process(
+            choices: Union[List[ExternKernelCaller], List[TritonTemplateCaller]]
+        ):
             from . import autotune_process
 
             # only benchmark triton kernel in sub process for now.
@@ -1622,7 +1637,7 @@ class AlgorithmSelectorCache(PersistentCache):
             triton = [c for c in choices if not isinstance(c, ExternKernelCaller)]
 
             timings = benchmark_in_current_process(extern)
-            timings.update(autotune_process.benchmark_in_sub_process(triton))
+            timings.update(autotune_process.benchmark_in_sub_process(triton))  # type: ignore[arg-type]
             return timings
 
         benchmark = (

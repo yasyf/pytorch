@@ -24,7 +24,6 @@ from typing import (
     List,
     Optional,
     Sequence,
-    Set,
     Tuple,
     TypeVar,
     Union,
@@ -406,10 +405,14 @@ class BaseSchedulerNode:
             and hasattr(V.kernel, "args")
         ):
             return
-        fused_nodes = {
-            node.get_name()
-            for node in self.scheduler.name_to_fused_node[self.get_name()].get_nodes()
-        }
+        fused_nodes = OrderedSet(
+            [
+                node.get_name()
+                for node in self.scheduler.name_to_fused_node[
+                    self.get_name()
+                ].get_nodes()
+            ]
+        )
 
         ordered_reads = sorted(self.read_writes.reads, key=lambda x: x.name)
         # NOTE remove V.graph.removed_operations once deps issue is fixed
@@ -904,9 +907,13 @@ class SchedulerNode(BaseSchedulerNode):
     def refresh_dependencies(self, normalize: bool) -> None:
         # Fake dependencies are added manually. They can not be analyzed from
         # extract_read_writes. Find them out and apply manually.
-        fake_deps = {
-            dep for dep in self.read_writes.reads if isinstance(dep, (WeakDep, StarDep))
-        }
+        fake_deps = OrderedSet(
+            [
+                dep
+                for dep in self.read_writes.reads
+                if isinstance(dep, (WeakDep, StarDep))
+            ]
+        )
 
         # don't normalize since the loop order may need to be further changed
         # later
@@ -1313,7 +1320,7 @@ class ForeachKernelSchedulerNode(FusedSchedulerNode):
     def get_producer_subnode_for(
         self, consumer: BaseSchedulerNode
     ) -> Optional[BaseSchedulerNode]:
-        producers = set()
+        producers = OrderedSet[BaseSchedulerNode]()
         for rd in consumer.read_writes.reads:
             if rd.name not in self.scheduler.name_to_buf:
                 continue
@@ -1534,7 +1541,8 @@ class ForeachKernelSchedulerNode(FusedSchedulerNode):
         template_nodes = [x for x in filtered_nodes if x.is_template()]
         if template_nodes:
             log.debug(
-                "ComboKernels: %d template nodes are filtered", {len(template_nodes)}
+                "ComboKernels: %d template nodes are filtered",
+                OrderedSet([len(template_nodes)]),
             )
         filtered_nodes = [x for x in filtered_nodes if x not in template_nodes]
         return filtered_nodes
@@ -1839,8 +1847,8 @@ class Scheduler:
                 self.nodes,
                 self.name_to_buf,
                 self.name_to_fused_node,
-                set(V.graph.graph_inputs.keys()),
-                set(V.graph.get_output_names()),
+                OrderedSet(V.graph.graph_inputs.keys()),
+                OrderedSet(V.graph.get_output_names()),
             )
         self.merge_loops()
         self.finalize_multi_template_buffers()
@@ -2210,7 +2218,7 @@ class Scheduler:
         return result
 
     def _get_unmet_dep_nodes(self, snode: BaseSchedulerNode) -> List[BaseSchedulerNode]:
-        unmet_deps = set()
+        unmet_deps = OrderedSet[str]()
         if isinstance(
             snode,
             (
@@ -2227,7 +2235,9 @@ class Scheduler:
                 f"get_unmet_dep_nodes is not implemented for {type(snode)}."
             )
         unmet_dep_ops = (self.name_to_buf[dep].defining_op for dep in unmet_deps)
-        return list({self.name_to_fused_node[n.get_name()] for n in unmet_dep_ops})
+        return list(
+            OrderedSet([self.name_to_fused_node[n.get_name()] for n in unmet_dep_ops])
+        )
 
     def _topological_sort_nodes(self) -> List[List[BaseSchedulerNode]]:
         """
@@ -2635,7 +2645,7 @@ class Scheduler:
         """
         Groups parallel nodes
         """
-        fused_nodes = set(self.nodes)
+        fused_nodes = OrderedSet(self.nodes)
         count = 0
         num_nodes_orig = len(self.nodes)
         log.debug("ComboKernels: Generating with num_ck_nodes = %d...", num_ck_nodes)
@@ -2741,7 +2751,7 @@ class Scheduler:
         caused indirectly by other fusions.
         """
         # since we are just returning boolean here, use slightly faster, unordered set
-        visited: Set[FusedSchedulerNode] = set()
+        visited: OrderedSet[FusedSchedulerNode] = OrderedSet()
 
         def found_path(node: BaseSchedulerNode) -> bool:
             # only fused nodes can introduce new ancestors.
@@ -2819,8 +2829,8 @@ class Scheduler:
         lhs_dep_nodes = _find_single_user_inputs(node1)
         rhs_dep_nodes = _find_single_user_inputs(node2)
 
-        lhs_reuse_keys = {buffer_reuse_key(buf) for buf in lhs_dep_nodes}
-        rhs_reuse_keys = {buffer_reuse_key(buf) for buf in rhs_dep_nodes}
+        lhs_reuse_keys = OrderedSet([buffer_reuse_key(buf) for buf in lhs_dep_nodes])
+        rhs_reuse_keys = OrderedSet([buffer_reuse_key(buf) for buf in rhs_dep_nodes])
 
         common_reuse_keys = lhs_reuse_keys.intersection(rhs_reuse_keys)
 
@@ -3488,7 +3498,7 @@ class Scheduler:
             import torch._dynamo.convert_frame
 
             stack = traceback.extract_stack()
-            seen = set()
+            seen = OrderedSet[tuple[str, Union[int, None]]]()
             for frame in reversed(stack):
                 # This is where maybe_cprofile is
                 if (

@@ -49,7 +49,6 @@ from typing import (
     List,
     Optional,
     overload,
-    Set,
     Tuple,
     Type,
     TypeVar,
@@ -80,6 +79,7 @@ from torch._utils_internal import (
 )
 from torch.fx._utils import _format_graph_code, lazy_format_graph_code
 from torch.nn.modules.lazy import LazyModuleMixin
+from torch.utils._ordered_set import OrderedSet
 from torch.utils._triton import has_triton, has_triton_package
 from torch.utils.hooks import RemovableHandle
 
@@ -676,7 +676,7 @@ def istype(obj: object, allowed_types: Iterable[type]) -> bool:
 
 def istype(obj, allowed_types):
     """isinstance() without subclasses"""
-    if isinstance(allowed_types, (tuple, list, set)):
+    if isinstance(allowed_types, (tuple, list, OrderedSet)):
         return type(obj) in allowed_types
     return type(obj) is allowed_types
 
@@ -884,9 +884,9 @@ class CompilationMetrics:
     fail_reason: Optional[str] = None
     fail_user_frame_filename: Optional[str] = None
     fail_user_frame_lineno: Optional[int] = None
-    non_compliant_ops: Optional[Set[str]] = None
-    compliant_custom_ops: Optional[Set[str]] = None
-    restart_reasons: Optional[Set[str]] = None
+    non_compliant_ops: Optional[OrderedSet[str]] = None
+    compliant_custom_ops: Optional[OrderedSet[str]] = None
+    restart_reasons: Optional[OrderedSet[str]] = None
     dynamo_time_before_restart_s: Optional[float] = None
     # Sometimes, we will finish analyzing a frame but conclude we don't want
     # to install any guarded code.  True means we actually decided to install
@@ -974,7 +974,7 @@ def record_compilation_metrics(compilation_metrics: CompilationMetrics):
     torch._logging.trace_structured(
         name,
         lambda: {
-            k: list(v) if isinstance(v, set) else v
+            k: list(v) if isinstance(v, OrderedSet) else v
             for k, v in dataclasses.asdict(compilation_metrics).items()
         },
         # NB: Because compilation metrics *includes* the logging overhead time,
@@ -1295,7 +1295,7 @@ def clone_input(x, *, dtype=None):
                 is_coalesced=x.is_coalesced(),
             )
         elif is_sparse_compressed(x):
-            if x.layout in {torch.sparse_csr, torch.sparse_bsr}:
+            if x.layout in OrderedSet([torch.sparse_csr, torch.sparse_bsr]):
                 compressed_indices = x.crow_indices()
                 plain_indices = x.col_indices()
             else:
@@ -1521,21 +1521,23 @@ def rot_n_helper(n):
     return fn
 
 
-common_constant_types: Set[type] = {
-    int,
-    float,
-    complex,
-    bool,
-    str,
-    bytes,
-    type(None),
-    Ellipsis.__class__,
-    types.CodeType,
-    torch.device,
-    torch.dtype,
-    torch.memory_format,
-    torch.layout,
-}
+common_constant_types: OrderedSet[type] = OrderedSet(
+    [
+        int,
+        float,
+        complex,
+        bool,
+        str,
+        bytes,
+        type(None),
+        Ellipsis.__class__,
+        types.CodeType,
+        torch.device,
+        torch.dtype,
+        torch.memory_format,
+        torch.layout,
+    ]
+)
 
 if has_triton_package():
     import triton
@@ -1555,7 +1557,7 @@ def is_safe_constant(v):
         return all(map(is_safe_constant, v))
     return isinstance(v, (enum.Enum, type, torch.Size)) or istype(
         v,
-        common_constant_types | {slice},
+        common_constant_types | OrderedSet([slice]),
     )
 
 
@@ -1873,7 +1875,7 @@ def same(
         )
     elif isinstance(ref, dict):
         assert isinstance(res, dict)
-        assert set(ref.keys()) == set(
+        assert OrderedSet(ref.keys()) == OrderedSet(
             res.keys()
         ), f"keys mismatch {set(ref.keys())} == {set(res.keys())}"
         for k in sorted(ref.keys()):
@@ -1895,9 +1897,11 @@ def same(
                 log_error("Accuracy failed for key name %s", k)
                 return False
         return True
-    elif isinstance(ref, set):
-        assert isinstance(res, set)
-        assert set(ref) == set(res), f"elements mismatch {set(ref)} == {set(res)}"
+    elif isinstance(ref, OrderedSet):
+        assert isinstance(res, OrderedSet)
+        assert OrderedSet(ref) == OrderedSet(
+            res
+        ), f"elements mismatch {set(ref)} == {set(res)}"
         return True
     elif isinstance(ref, (torch.Tensor, float)):
         assert not isinstance(ref, torch._subclasses.FakeTensor)
@@ -3293,7 +3297,7 @@ class Lit:
         return self.s
 
 
-warn_once_cache: Set[str] = set()
+warn_once_cache: OrderedSet[str] = OrderedSet()
 
 
 def warn_once(msg, stacklevel=1):

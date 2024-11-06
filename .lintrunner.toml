@@ -1639,6 +1639,7 @@ is_formatter = true
 [[linter]]
 code = 'SET_LINTER'
 include_patterns = [
+    "torch/_dynamo/**/*.py",
     "torch/_inductor/**/*.py",
 ]
 command = [

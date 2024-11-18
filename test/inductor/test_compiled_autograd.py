@@ -1,4 +1,5 @@
 # Owner(s): ["module: inductor"]
+# ruff: noqa: F841
 import contextlib
 import dataclasses
 import functools
@@ -795,7 +796,6 @@ main()
 
             return torch.compile(gm, backend=inner_compiler)
 
-        fwd_compiler_fn = functools.partial(eager_with_check, is_bwd=False)
         bwd_compiler_fn = functools.partial(eager_with_check, is_bwd=True)
 
         def fn(inputs):
@@ -936,7 +936,7 @@ main()
         torch._dynamo.reset()
         handle = torch._dynamo.convert_frame.register_bytecode_hook(bytecode_hook)
         try:
-            out = compiled_fn(inputs)
+            compiled_fn(inputs)
             self.assertTrue(len(inputs) == 0)
         finally:
             handle.remove()

@@ -52,7 +52,7 @@ class TestDraftExport(TestCase):
         )
 
     def test_missing_meta_kernel_custom_op(self):
-        with torch.library._scoped_library("mylib", "FRAGMENT") as lib:
+        with torch.library._scoped_library("mylib", "FRAGMENT"):
 
             @torch.library.custom_op("mylib::foo2", mutates_args={})
             def foo2_impl(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:

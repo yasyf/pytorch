@@ -271,7 +271,7 @@ class _ReversibleFunction(torch.autograd.Function):
         # split duplicated tensor
         hidden_states, attn_output = torch.chunk(hidden_states, 2, dim=-1)
 
-        for layer_id, (layer, layer_head_mask) in enumerate(zip(layers, head_mask)):
+        for layer in layers:
             if output_hidden_states is True:
                 all_hidden_states.append(hidden_states)
 
@@ -650,7 +650,7 @@ class XSoftmax(torch.autograd.Function):
 
     @staticmethod
     def backward(self, grad_output):
-        (output, rmask) = self.saved_tensors
+        output, _ = self.saved_tensors
         inputGrad = softmax_backward_data(self, grad_output, output, self.dim, output)
         return inputGrad, None, None
 
@@ -1317,6 +1317,8 @@ class ReproTests(torch._dynamo.test_case.TestCase):
     @torch._dynamo.config.patch(error_on_recompile=True)
     @torch.fx.experimental._config.patch(use_duck_shape=False)
     def test_dynamic_shape_disable_duck_size(self):
+        # noqa: F841
+
         class TestModel(nn.Module):
             def __init__(
                 self,
@@ -1332,11 +1334,11 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         x1 = torch.rand(2, 5, 10, 10).to(memory_format=torch.channels_last)
         x2 = torch.rand(2, 5, 4, 8).to(memory_format=torch.channels_last)
 
-        o1_ref = main_model(x1, 4)
-        o1 = opt_model(x1, 4)
+        main_model(x1, 4)
+        opt_model(x1, 4)
 
-        o2_ref = main_model(x2, 20)
-        o2 = opt_model(x2, 20)
+        main_model(x2, 20)
+        opt_model(x2, 20)
 
     def test_chunk_reformer_ff(self):
         input = torch.randn([1, 4096, 256])
@@ -1458,7 +1460,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         self.assertEqual(cnt.frame_count, 2)
         self.assertEqual(cnt.op_count, 2)  # rand, rand
         try:
-            graph, _ = torch._dynamo.export(fn)()
+            _, _ = torch._dynamo.export(fn)()
             # See https://github.com/pytorch/pytorch/pull/87490
             self.fail("unexpected export success")
         except torch._dynamo.exc.Unsupported:
@@ -1688,7 +1690,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         )
 
         x = torch.rand([111, 262], device=device)
-        y2 = forward_aot(x, 2)  # previously failed
+        forward_aot(x, 2)  # previously failed
 
     def test_issue175(self):
         n_heads = 2
@@ -2298,7 +2300,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         class Mod(torch.nn.Module):
             def forward(self, listy):
                 x = listy[3:5]
-                for i in range(10):
+                for _ in range(10):
                     z = torch.abs(torch.randn(10)) + 1
                     x[0] = z
                 return x
@@ -2594,7 +2596,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
 
             def forward(self, inp):
                 res = 0
-                for name, buffer in self.named_buffers():
+                for _, buffer in self.named_buffers():
                     res += buffer.sum()
 
                 return inp.cos() + res
@@ -2693,7 +2695,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
 
             def forward(self, inp):
                 res = torch.zeros(3, 3)
-                for mod in self.modules():
+                for _ in self.modules():
                     res += self.fc(inp)
                 return res
 
@@ -2774,7 +2776,8 @@ class ReproTests(torch._dynamo.test_case.TestCase):
             for (sh, st, dt, dev, rg) in args
         ]
 
-        opt_foo = torch._dynamo.optimize("aot_eager_decomp_partition")(foo)
+        torch._dynamo.optimize("aot_eager_decomp_partition")(foo)
+
         with torch.cuda.amp.autocast(enabled=True):
             ref = foo(*args)[0]
             res = foo(*args)[0]
@@ -2949,7 +2952,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         # Repro of huggingface graph break inside loop in `get_parameter_dtype`.
         # Skip only the inner frame that has loop that contains graph break.
         def inner(x):
-            for i in range(3):
+            for _ in range(3):
                 x += 1
                 torch._dynamo.graph_break()
             return x
@@ -3622,7 +3625,6 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         ref2 = fn(x, inp_list2)
         ref3 = fn(x, inp_list3)
 
-        cnt = torch._dynamo.testing.CompileCounter()
         opt_fn = torch.compile(fn, fullgraph=True)
 
         opt_ret1 = opt_fn(x, inp_list1)
@@ -4122,7 +4124,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
             return x.sin()
 
         counter = CompileCounter()
-        compiled_fn = torch._dynamo.optimize(counter)(fn)(torch.randn([2, 2]), [])
+        torch._dynamo.optimize(counter)(fn)(torch.randn([2, 2]), [])
         self.assertEqual(counter.frame_count, 1)
 
     def test_graph_break_on_jit_isinstance(self):
@@ -4274,7 +4276,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         torch._dynamo.reset()
         torch._dynamo.utils.clear_compilation_metrics()
 
-        res = torch.compile(fn, backend="aot_eager")(x)
+        torch.compile(fn, backend="aot_eager")(x)
 
         all_metrics = torch._dynamo.utils.get_compilation_metrics()
 
@@ -4378,7 +4380,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
 
         compiled_fn = torch.compile(func, backend=cnt, fullgraph=True)
         requires_grad = func is not func1
-        for i in range(0, 5):
+        for _ in range(0, 5):
             # Inputs
             eager_a = torch.ones([6], requires_grad=requires_grad)
             compiled_a = torch.ones([6], requires_grad=requires_grad)
@@ -4466,7 +4468,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
                 pass
 
         def fn(x, y):
-            ucm = UserCtxManager()
+            ucm = UserCtxManager()  # noqa: F841
             return x * x
 
         cnt = torch._dynamo.testing.CompileCounter()
@@ -4517,11 +4519,11 @@ class ReproTests(torch._dynamo.test_case.TestCase):
             e = base[:, 8:10]
             f = base[:, 10:12]
             f2 = base[:, 10:14]
-            out = fn(a, b, c, d, e, f)
+            fn(a, b, c, d, e, f)
             with self.assertRaisesRegex(
                 AssertionError, "is being compiled with dynamic shapes"
             ):
-                out2 = fn(a, b, c, d, e, f2)
+                fn(a, b, c, d, e, f2)
 
     def test_user_ctor_ctx_manager_custom_init(self):
         class UserCtxManager:
@@ -4535,7 +4537,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
                 pass
 
         def fn(x, y):
-            ucm = UserCtxManager(y)
+            ucm = UserCtxManager(y)  # noqa: F841
             return x * y[0]
 
         cnt = torch._dynamo.testing.CompileCounter()
@@ -4559,7 +4561,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
 
         def fn(x, counter):
             x = x * x
-            ucm = UserCtxManager(counter)
+            ucm = UserCtxManager(counter)  # noqa: F841
             return x * x
 
         cnt = torch._dynamo.testing.CompileCounter()
@@ -4567,7 +4569,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
         x = torch.rand([2, 2])
         self.assertEqual(opt_fn(x, counter), fn(x, counter))
         self.assertEqual(counter[0], 2)
-        for i in range(0, 10):
+        for _ in range(0, 10):
             opt_fn(x, counter)
         self.assertEqual(counter[0], 12)
         if torch._dynamo.config.assume_static_by_default:
@@ -4699,7 +4701,7 @@ class ReproTests(torch._dynamo.test_case.TestCase):
 
     def test_invalid_seq_unpack(self):
         def myfn(arg):
-            (a, b) = arg
+            (a, b) = arg  # noqa: F841
 
         def fn():
             return myfn((1, 2, 3))
@@ -4784,13 +4786,13 @@ class ReproTests(torch._dynamo.test_case.TestCase):
 
         a = torch.randn(2, 4)
         a_ref = a.clone()
-        out_ref = foo(a_ref)
+        foo(a_ref)
         f_compiled = torch.compile(foo, backend="aot_eager")
         with self.assertRaisesRegex(
             RuntimeError,
             "encountered a mutation on a view chain of length 2, where view 1 was an as_strided",
         ):
-            out = f_compiled(a)
+            f_compiled(a)
 
     def test_dont_aggressively_write_assert(self):
         record_graph = torch._dynamo.testing.EagerAndRecordGraphs()
@@ -5600,7 +5602,7 @@ def forward(self, s0 : torch.SymInt, s1 : torch.SymInt, L_x_ : torch.Tensor):
         random_op = torch.compile(random_op)
         params = {"from": -10, "to": 10}
         tensor = torch.randn([2, 3])
-        res = random_op(tensor, params)
+        random_op(tensor, params)
 
     # https://github.com/pytorch/pytorch/issues/131019
     def test_tensor_uniform(self):
@@ -5611,7 +5613,7 @@ def forward(self, s0 : torch.SymInt, s1 : torch.SymInt, L_x_ : torch.Tensor):
         uniform_op = torch.compile(uniform_op)
         params = {"from": -10, "to": 10}
         tensor = torch.randn([2, 3])
-        res = uniform_op(tensor, params)
+        uniform_op(tensor, params)
 
     def test_data_attr_mutation_after_saved_for_bw(self):
         def f(x):
@@ -5751,7 +5753,7 @@ def forward(self, s0 : torch.SymInt, s1 : torch.SymInt, L_x_ : torch.Tensor):
 
         @torch.compile(backend="aot_eager_decomp_partition")
         def f(x, l):
-            z = x.sin()
+            z = x.sin()  # noqa: F841
             y = x + 1
             # graph input has its storage mutated
             torch.ops.fsdp.copy_.default(x, y)
@@ -5840,14 +5842,14 @@ def forward(self, s0 : torch.SymInt, s1 : torch.SymInt, L_x_ : torch.Tensor):
         opt_mod = torch.compile(mod, backend="eager")
 
         x = torch.randn(1, 1)
-        ref = mod(x)
-        res = opt_mod(x)
+        ref = mod(x)  # noqa: F841
+        res = opt_mod(x)  # noqa: F841
 
         mod.submod.multipliers = [3.3, 4.4]
         # Since guard_nn_modules is False, this will not recompile
         with torch._dynamo.config.patch(error_on_recompile=True):
-            ref = mod(x)
-            res = opt_mod(x)
+            ref = mod(x)  # noqa: F841
+            res = opt_mod(x)  # noqa: F841
 
     def test_optimized_module_training(self):
         mod = torch.nn.Linear(3, 3)
@@ -6150,9 +6152,9 @@ def forward(self, s0 : torch.SymInt, s1 : torch.SymInt, L_x_ : torch.Tensor):
         x = torch.randn(4)
         opt_fn = torch.compile(fn, backend="eager", fullgraph=True)
 
-        ref = fn(config, x)
+        fn(config, x)
         cloned_config = copy.deepcopy(config)
-        res = opt_fn(cloned_config, x)
+        opt_fn(cloned_config, x)
 
         self.assertEqual(fn(config, x), opt_fn(config, x))
         self.assertEqual(cloned_config.baz, 4)
@@ -6210,7 +6212,7 @@ def forward(self, s0 : torch.SymInt, s1 : torch.SymInt, L_x_ : torch.Tensor):
 
         x = torch.ones(2)
         with torch.no_grad():
-            y = model(x)
+            model(x)
 
     def test_typed_dict(self):
         class LlavaImagePixelInputs(TypedDict):

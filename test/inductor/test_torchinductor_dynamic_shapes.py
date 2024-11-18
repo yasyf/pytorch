@@ -976,7 +976,7 @@ class TestInductorDynamic(TestCase):
                     return op(x, y)
 
                 cnt = CompileCounterWithBackend("inductor")
-                fn_opt = torch._dynamo.optimize(cnt)(fn)
+                fn_opt = torch.compile(fn, backend=cnt)
 
                 x = torch.arange(3)
                 self.assertEqual(fn(x, 2.0), fn_opt(x, 2.0))
@@ -998,7 +998,7 @@ class TestInductorDynamic(TestCase):
             )
 
         cnt = CompileCounterWithBackend("inductor")
-        fn_opt = torch._dynamo.optimize(cnt)(fn)
+        fn_opt = torch.compile(fn, backend=cnt)
         x = torch.arange(3)
         z = 1.3
 
@@ -1012,7 +1012,7 @@ class TestInductorDynamic(TestCase):
             return math.floor(x**2) * y
 
         cnt = CompileCounterWithBackend("inductor")
-        fn_opt = torch._dynamo.optimize(cnt)(fn)
+        fn_opt = torch.compile(fn, backend=cnt)
         y = torch.arange(3)
 
         self.assertEqual(fn(2.0, y), fn_opt(2.0, y))

@@ -529,7 +529,7 @@ class CPUReproTests(TestCase):
                 if not empty_state:
                     inps.append((h, c))
 
-                fn_opt = torch._dynamo.optimize("inductor")(mod)
+                fn_opt = torch.compile(mod, backend="inductor")
                 _, code = run_and_get_cpp_code(fn_opt, *inps)
 
                 # Check that _flat_weights are not functional_tensor, otherwise
@@ -690,7 +690,7 @@ class CPUReproTests(TestCase):
                 return self.model(x)
 
         model = M(H=32, W=32, num_channels=4, num_colors=2)
-        fn_opt = torch._dynamo.optimize("inductor")(model)
+        fn_opt = torch.compile(model, backend="inductor")
         v = (torch.rand(10, 32, 32, 4) > 0.5).to(torch.float32)
         inps = [
             v.clone(),
@@ -739,7 +739,7 @@ class CPUReproTests(TestCase):
 
         with torch.no_grad():
             inps = [embeds, (hidden_0, hidden_1)]
-            fn_opt = torch._dynamo.optimize("inductor")(mod)
+            fn_opt = torch.compile(mod, backend="inductor")
             _, code = run_and_get_cpp_code(fn_opt, *inps)
             # This case is unsupported
             self.assertFalse("torch.ops.mkldnn._lstm" in code)
@@ -1672,7 +1672,7 @@ class CPUReproTests(TestCase):
         self.common(fn, (p0, p1))
 
     def test_no_op_squeeze(self):
-        @torch._dynamo.optimize("inductor")
+        @torch.compile(backend="inductor")
         def forward(arg0_1):
             return torch.ops.aten.squeeze.dim(arg0_1, 1)
 
@@ -1680,7 +1680,7 @@ class CPUReproTests(TestCase):
         self.common(forward, (x,))
 
     def test_parallel_num_threads(self):
-        @torch._dynamo.optimize("inductor")
+        @torch.compile(backend="inductor")
         def fn(x1, x2):
             return x1 + x2
 
@@ -1939,7 +1939,7 @@ class CPUReproTests(TestCase):
         self.assertEqual(expected, actual)
 
     def test_load_same_bool_tensor_twice(self):
-        @torch._dynamo.optimize("inductor")
+        @torch.compile(backend="inductor")
         def fn(a, b):
             x = torch.masked_fill(a, b, -33.0)
             y = torch.masked_fill(a, b, -33.0)
@@ -2763,7 +2763,7 @@ class CPUReproTests(TestCase):
             torch._dynamo.reset()
             metrics.reset()
             _, code = run_and_get_cpp_code(
-                torch._dynamo.optimize("inductor")(fn),
+                torch.compile(fn, backend="inductor"),
                 x,
             )
             self.assertEqual(code.count("empty_strided_cpu("), 3)
@@ -3021,7 +3021,7 @@ class CPUReproTests(TestCase):
     def test_cpp_kernel_profile(self):
         from torch.profiler import profile
 
-        @torch._dynamo.optimize("inductor", nopython=True)
+        @torch.compile(backend="inductor", fullgraph=True)
         def fn(a, b):
             return a + b
 
@@ -3146,7 +3146,7 @@ class CPUReproTests(TestCase):
             b = torch.randn(size=(4, 16), dtype=torch.bfloat16)
             c = torch.randn(size=(4, 16), dtype=torch.bfloat16)
             idx = torch.zeros(size=[4], dtype=torch.int64)
-            opt_fn = torch._dynamo.optimize("inductor")(fn)
+            opt_fn = torch.compile(fn, backend="inductor")
             opt_fn(a, b, c, idx)
             self.assertEqual(metrics.generated_kernel_count, 3)
             self.assertTrue(same(fn(a, b, c, idx), opt_fn(a, b, c, idx)))
@@ -3158,7 +3158,7 @@ class CPUReproTests(TestCase):
             b = torch.randn(size=(4, 32), dtype=torch.bfloat16)
             c = torch.randn(size=(4, 32), dtype=torch.bfloat16)
             idx = torch.zeros(size=[4], dtype=torch.int64)
-            opt_fn = torch._dynamo.optimize("inductor")(fn)
+            opt_fn = torch.compile(fn, backend="inductor")
             opt_fn(a, b, c, idx)
             self.assertEqual(metrics.generated_kernel_count, 3)
             self.assertTrue(same(fn(a, b, c, idx), opt_fn(a, b, c, idx)))
@@ -3170,7 +3170,7 @@ class CPUReproTests(TestCase):
             b = torch.randn(size=(4, 64), dtype=torch.bfloat16)
             c = torch.randn(size=(4, 64), dtype=torch.bfloat16)
             idx = torch.zeros(size=[4], dtype=torch.int64)
-            opt_fn = torch._dynamo.optimize("inductor")(fn)
+            opt_fn = torch.compile(fn, backend="inductor")
             opt_fn(a, b, c, idx)
             print(metrics.generated_kernel_count)
             self.assertEqual(metrics.generated_kernel_count, 2)
@@ -3183,7 +3183,7 @@ class CPUReproTests(TestCase):
             b = torch.randn(size=(4, 128), dtype=torch.bfloat16)
             c = torch.randn(size=(4, 128), dtype=torch.bfloat16)
             idx = torch.zeros(size=[4], dtype=torch.int64)
-            opt_fn = torch._dynamo.optimize("inductor")(fn)
+            opt_fn = torch.compile(fn, backend="inductor")
             opt_fn(a, b, c, idx)
             self.assertEqual(metrics.generated_kernel_count, 1)
             self.assertTrue(same(fn(a, b, c, idx), opt_fn(a, b, c, idx)))
@@ -3195,7 +3195,7 @@ class CPUReproTests(TestCase):
         for dtype in _lowp_fp_dtypes:
             metrics.reset()
             x = torch.randn(100, 100).to(dtype)
-            opt_fn = torch._dynamo.optimize("inductor")(fn)
+            opt_fn = torch.compile(fn, backend="inductor")
             self.assertTrue(same(fn(x), opt_fn(x)))
             assert metrics.cpp_to_dtype_count == 0
             check_metrics_vec_kernel_count(1)
@@ -3247,7 +3247,7 @@ class CPUReproTests(TestCase):
 
         metrics.reset()
         x = torch.randn(1, 32, 16, 68)
-        opt_fn = torch._dynamo.optimize("inductor")(fn)
+        opt_fn = torch.compile(fn, backend="inductor")
         _, code = run_and_get_cpp_code(opt_fn, x)
         self.assertTrue(same(fn(x), opt_fn(x)))
         # def and use
@@ -3434,7 +3434,7 @@ class CPUReproTests(TestCase):
             def run(*ex, **kwargs):
                 return mod(*ex, **kwargs)
 
-            run = torch._dynamo.optimize(compile_fx_wrapper)(run)
+            run = torch.compile(run, backend=compile_fx_wrapper)
             _, code = run_and_get_cpp_code(run, v)
             self.assertFalse("= as_strided(" in code)
             self.assertEqual(run(*v), mod(*v))
@@ -3522,7 +3522,7 @@ class CPUReproTests(TestCase):
             return z
 
         inps = [torch.randn(1, 2, 8, 4), torch.randn(1, 2, 8, 4)]
-        fn_opt = torch._dynamo.optimize("inductor")(fn)
+        fn_opt = torch.compile(fn, backend="inductor")
         _, code = run_and_get_cpp_code(fn_opt, *inps)
         self.assertTrue("in_out_ptr" in code)
         self.assertEqual(fn_opt(*inps), fn(*inps))
@@ -4520,7 +4520,7 @@ class CPUReproTests(TestCase):
             return (mul_1,)
 
         x = torch.zeros(2, 209985).to(torch.int64)
-        opt_fn = torch._dynamo.optimize("inductor")(fn)
+        opt_fn = torch.compile(fn, backend="inductor")
         _, code = run_and_get_cpp_code(opt_fn, x)
         FileCheck().check_count(
             "return at::vec::VectorizedN<int64_t,2>::loadu(tmpbuf.data(),",
@@ -4535,7 +4535,7 @@ class CPUReproTests(TestCase):
         with config.patch({"cpp.simdlen": 0}):
             x1 = torch.randn(2, 10).to(torch.half)
             x2 = torch.randn(2, 10).to(torch.half)
-            opt_fn = torch._dynamo.optimize("inductor")(fn)
+            opt_fn = torch.compile(fn, backend="inductor")
             _, code = run_and_get_cpp_code(opt_fn, x1, x2)
             FileCheck().check_count(
                 "static_cast<float>",

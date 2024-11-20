@@ -282,7 +282,6 @@ def user_defined_triton_kernel_transitive_closure_source_code(kernel) -> str:
                     else:
                         symbol_str = f"{symbol!r}"
                     if annotation := global_annotations.get(symbol_name):
-                        annotion_code = ""
                         if isinstance(annotation, type):
                             annotation_code = (
                                 f": {annotation.__module__}.{annotation.__name__}"
@@ -1220,12 +1219,6 @@ class PythonWrapperCodegen(CodeGen):
                 past_planning_states.append(planning_states.pop())
         past_planning_states.append(planning_states.pop())
         assert len(planning_states) == 0
-
-        # conservatively use the sum of all allocated buffer sizes
-        # in potentially nested scopes as the total allocated size
-        total_allocated_buffer_size = sum(
-            s.total_allocated_buffer_size for s in past_planning_states
-        )
 
     def codegen_input_size_var_decl(self, code: IndentedBuffer, name):
         code.writeline(f"{self.declare}{name}_size = {name}.{self.size}{self.ending}")

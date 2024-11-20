@@ -253,8 +253,6 @@ def mark_nodes_dislike_padding(
             else None
         )
 
-    output_node = g.find_nodes(op="output")[0]
-
     for cur in reversed(g.nodes):
         op = _get_overload_packet(cur)
         if not op:
@@ -2049,7 +2047,7 @@ class GraphLowering(torch.fx.Interpreter):
             from .codecache import AotCodeCompiler
 
             assert self.cpp_wrapper, "AOT mode only supports C++ wrapper"
-            code, linemap = self.codegen_with_cpp_wrapper()
+            code, _linemap = self.codegen_with_cpp_wrapper()
             output_code_log.debug("Output code: \n%s", code)
 
             serialized_extern_kernel_nodes = None

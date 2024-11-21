@@ -3,6 +3,7 @@
 #include <c10/core/MemoryFormat.h>
 #include <torch/library.h>
 
+#include <c10/core/ScalarType.h>
 #include <iostream>
 
 using namespace at::native::onednn;
@@ -155,8 +156,15 @@ class QConvoneDNNXPU final {
         stride.vec(),
         dilation.vec());
 
+    bool fp32_output =
+        output_dtype.has_value() && (output_dtype == c10::kFloat);
+    bool bfloat16_output =
+        output_dtype.has_value() && (output_dtype == c10::kBFloat16);
+    auto dst_dtype = fp32_output
+        ? c10::kFloat
+        : (bfloat16_output ? c10::kBFloat16 : c10::kByte);
     Tensor output = at::empty(
-        dst_tz, device(c10::kXPU).dtype(output_dtype).memory_format(mfmt));
+        dst_tz, device(c10::kXPU).dtype(dst_dtype).memory_format(mfmt));
 
     return quantized_convolution_pt2(
         act,

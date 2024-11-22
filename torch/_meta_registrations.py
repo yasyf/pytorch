@@ -4771,6 +4771,8 @@ def zeros_like(
 
 @register_meta(aten.select.int)
 def meta_select(self, dim, index):
+    from torch.fx.experimental.symbolic_shapes import guard_size_oblivious
+
     ndim = self.dim()
     torch._check_index(
         ndim != 0,
@@ -4781,7 +4783,9 @@ def meta_select(self, dim, index):
     size = self.size(dim)
 
     torch._check_index(
-        not (-index > size or index >= size),
+        not (
+            guard_size_oblivious(-index > size) or guard_size_oblivious(index >= size)
+        ),
         lambda: f"select(): index {index} out of range for tensor of size "
         f"{self.size()} at dimension {dim}",
     )

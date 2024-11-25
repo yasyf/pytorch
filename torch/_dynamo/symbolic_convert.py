@@ -85,6 +85,7 @@ from .variables.dicts import ConstDictVariable, SetVariable
 from .variables.functions import (
     BaseUserFunctionVariable,
     FunctionDecoratedByContextlibContextManagerVariable,
+    GeneratorFunctionVariable,
     NestedUserFunctionVariable,
     SkipFunctionVariable,
     UserFunctionVariable,
@@ -3138,6 +3139,7 @@ class InliningInstructionTranslator(InstructionTranslatorBase):
             func,
             (
                 UserFunctionVariable,
+                GeneratorFunctionVariable,
                 NestedUserFunctionVariable,
                 FunctionDecoratedByContextlibContextManagerVariable,
             ),

@@ -545,6 +545,27 @@ comprehensive_failures = {
     xfail(
         "nn.functional.upsample_bilinear", "", dtypes=(torch.uint8,)
     ),  # off by one error
+    xfail(
+        "eye",
+        dtypes=(
+            torch.float8_e4m3fn,
+            torch.float8_e5m2,
+            torch.float8_e4m3fnuz,
+            torch.float8_e5m2fnuz,
+        ),
+    ),
+}
+
+quick_failures = {
+    xfail(
+        "eye",
+        dtypes=(
+            torch.float8_e4m3fn,
+            torch.float8_e5m2,
+            torch.float8_e4m3fnuz,
+            torch.float8_e5m2fnuz,
+        ),
+    ),
 }
 
 
@@ -558,6 +579,7 @@ class TestDecomp(TestCase):
     @onlyNativeDeviceTypes
     @skipIfCrossRef
     @suppress_warnings
+    @skipOps("TestDecomp", "test_quick", quick_failures)
     @ops(_decomp_test_ops)
     def test_quick(self, device, dtype, op):
         self.do_cross_ref(device, dtype, op, run_all=False)

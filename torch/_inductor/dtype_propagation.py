@@ -1,13 +1,28 @@
 # mypy: allow-untyped-defs
 import functools
-from typing import Callable, Optional, Protocol, Sequence, Tuple, TypeVar, Union
+from typing import (
+    Callable,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    TYPE_CHECKING,
+    TypeVar,
+    Union,
+)
 
 import sympy
+
+
+if TYPE_CHECKING:
+    from torch._inductor.loop_body import LoopBodyBlock
 
 import torch
 from torch._inductor.virtualized import V
 from torch._prims_common import ELEMENTWISE_TYPE_PROMOTION_KIND
+from torch.utils._sympy.symbol import symbol_is_type, SymT
 
+from .utils import upcast_compute_type
 from .virtualized import OpsValue
 
 
@@ -138,20 +153,24 @@ class DtypePropagationOpsHandler:
 
     @staticmethod
     def constant(value: torch.types.Number, dtype: torch.dtype) -> torch.dtype:
-        return dtype
+        return upcast_compute_type(dtype)
 
     @staticmethod
     def load_seed(name: str, offset: int) -> torch.dtype:
-        return torch.float32
+        return upcast_compute_type(V.graph.get_dtype(name))
 
     @staticmethod
     def randint64(seed: int, offset: int, low: int, high: int) -> torch.dtype:
         return torch.int64
 
     @staticmethod
-    def masked(mask: DTypeArg, body: DTypeArg, other: DTypeArg) -> torch.dtype:
-        # TODO: inspect body to propagate dtype
-        return torch.float32
+    def masked(mask: DTypeArg, body: "LoopBodyBlock", other: DTypeArg) -> torch.dtype:
+        # TODO - we avoid calling this in codegen, needs work for non codegen use cases
+        loads = body.graph.find_nodes(op="call_method", target="load")
+        if len(loads) <= 1:
+            return promote_types([other])
+
+        return upcast_compute_type(V.graph.get_dtype(loads[-1].args[1]))
 
     @staticmethod
     def where(a: DTypeArg, b: DTypeArg, c: DTypeArg) -> torch.dtype:
@@ -159,7 +178,17 @@ class DtypePropagationOpsHandler:
 
     @staticmethod
     def index_expr(expr: sympy.Expr, dtype: torch.dtype) -> torch.dtype:
-        return dtype
+        # TODO - TODO - rationalize index_expr. The dtype is not always used and we are inconsistent about int32 or int64
+        # in lowerings. cpp just uses the dtype
+        if hasattr(V.kernel, "index_dtype"):
+            dtype = torch.int32 if V.kernel.index_dtype == "tl.int32" else torch.int64
+
+        for index_var in expr.free_symbols:
+            if symbol_is_type(index_var, SymT.TMP):
+                cse_var = V.kernel.cse.varname_map[index_var.name]
+                dtype = torch.promote_types(dtype, cse_var.dtype)
+
+        return upcast_compute_type(dtype)
 
     @staticmethod
     def to_dtype(
@@ -168,13 +197,13 @@ class DtypePropagationOpsHandler:
         src_dtype: Optional[torch.dtype] = None,
         use_compute_types=True,
     ) -> torch.dtype:
-        return dtype
+        return upcast_compute_type(dtype) if use_compute_types else dtype
 
     @staticmethod
     def to_dtype_bitcast(
         x: DTypeArg, dtype: torch.dtype, src_dtype: torch.dtype
     ) -> torch.dtype:
-        return dtype
+        return upcast_compute_type(dtype)
 
     @staticmethod
     def gelu(x: DTypeArg) -> torch.dtype:
@@ -215,8 +244,8 @@ class DtypePropagationOpsHandler:
         return torch.float
 
     @staticmethod
-    def store_reduction(name: str, index, value: DTypeArg) -> torch.dtype:
-        return V.graph.get_dtype(name)
+    def store_reduction(name: str, index, value: DTypeArg) -> None:
+        return None
 
     @staticmethod
     def reduction(
@@ -225,14 +254,12 @@ class DtypePropagationOpsHandler:
         return dtype
 
     @staticmethod
-    def store(
-        name: str, index, value: DTypeArg, mode: Optional[str] = None
-    ) -> torch.dtype:
-        return V.graph.get_dtype(name)
+    def store(name: str, index, value: DTypeArg, mode: Optional[str] = None) -> None:
+        return None
 
     @staticmethod
     def load(name: str, index) -> torch.dtype:
-        return V.graph.get_dtype(name)
+        return upcast_compute_type(V.graph.get_dtype(name))
 
     @staticmethod
     def floor(x: DTypeArg) -> torch.dtype:

@@ -63,6 +63,7 @@ from ..utils import (
     Placeholder,
     sympy_dot,
     sympy_subs,
+    upcast_compute_type,
 )
 from ..virtualized import _ops as ops, OpsHandler, ReductionType, StoreMode, V
 from ..wrapper_benchmark import get_kernel_category_by_source_code
@@ -676,15 +677,6 @@ def triton_compute_type(dtype: torch.dtype) -> str:
     return triton_type(upcast_compute_type(dtype))
 
 
-def upcast_compute_type(dtype: torch.dtype) -> torch.dtype:
-    """Maybe upcast [b]float16 to float32"""
-    if config.triton.codegen_upcast_to_fp32 and (
-        dtype == torch.float16 or dtype == torch.bfloat16
-    ):
-        return torch.float32
-    return dtype
-
-
 def _get_primitive_bitwidth(dtype: torch.dtype) -> int:
     """Number of bits of triton_compute_type()"""
     dtype = upcast_compute_type(dtype)
@@ -810,7 +802,9 @@ class TritonOverrides(OpOverrides):
                 triton_type_name = str(dtype).split(".")[-1]
                 triton_dtype = f"tl.{triton_type_name}"
             cast_x = f"{cast_x}.to({triton_dtype}, bitcast=True)"
-            return f"{cast_x}.to(tl.float32)"
+            if dtype in (torch.float16, torch.bfloat16):
+                return f"{cast_x}.to(tl.float32)"
+            return cast_x
         else:
             src_dtype_bitwidth = _get_primitive_bitwidth(src_dtype)
             target_dtype_bitwidth = _get_primitive_bitwidth(dtype)
@@ -2130,7 +2124,7 @@ class TritonKernel(SIMDKernel):
             f"{sorter_indices}, "
             f"{block_size}, "
             ")",
-            dtype=values.dtype,  # type: ignore[attr-defined]
+            dtype=indexing_dtype,  # type: ignore[attr-defined]
         )
 
         return result

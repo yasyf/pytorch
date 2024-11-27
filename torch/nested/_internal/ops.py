@@ -253,8 +253,7 @@ def lookup_jagged(func, *args, **kwargs) -> Optional[Callable]:
 
 def extract_kwargs(arg):
     kwargs = {
-        "offsets": arg.offsets(),
-        "_metadata_cache": arg._metadata_cache,
+        "metadata": arg._metadata,
         "_ragged_idx": arg._ragged_idx,
     }
     return kwargs
@@ -2009,95 +2008,6 @@ def to_padded_tensor_default(func, *args, **kwargs):
     return padded_out
 
 
-@register_jagged_func(
-    torch.ops.aten._nested_from_padded_tensor.default,
-    "padded: t, offsets: t, dummy: jt, ragged_idx: any?, min_seqlen: any?, max_seqlen: any?, sum_S: any?",
-)
-def _nested_from_padded_tensor_default(func, *args, **kwargs):
-    _, new_kwargs = normalize_function(  # type: ignore[misc]
-        func, args=args, kwargs=kwargs, normalize_to_only_use_kwargs=True
-    )
-
-    if new_kwargs["ragged_idx"] != 1:
-        raise RuntimeError(
-            "_nested_from_padded_tensor(): only ragged_idx=1 supported for jagged layout"
-        )
-
-    padded, offsets = new_kwargs["padded"], new_kwargs["offsets"]
-
-    # non-3D padded is not supported by the underlying FBGEMM kernel so do shape gymnastics
-    padded_shape = padded.shape
-    if padded.dim() > 3:
-        padded = padded.flatten(start_dim=2)
-    elif padded.dim() < 3:
-        padded = padded.unsqueeze(-1)
-
-    # NB: The CUDA kernel for padded dense -> jagged conversion does not support
-    # integer / bool types; work around this by casting to half.
-    is_bool = padded.dtype is torch.bool
-    if is_bool and padded.is_cuda:
-        padded = padded.to(torch.half)
-    values = torch.ops.aten._padded_dense_to_jagged_forward(
-        padded, [offsets], new_kwargs["sum_S"]
-    )
-    if is_bool and values.is_cuda:
-        values = values.to(torch.bool)
-
-    # shape gymnastics part 2
-    if len(padded_shape) > 3:
-        values = values.unflatten(-1, padded_shape[2:])
-    elif len(padded_shape) < 3:
-        values = values.squeeze(-1)
-
-    ragged_idx = new_kwargs["ragged_idx"]
-    min_seqlen = new_kwargs["min_seqlen"]
-    max_seqlen = new_kwargs["max_seqlen"]
-    metadata_cache = {}
-    if min_seqlen is not None:
-        metadata_cache["min_seqlen"] = min_seqlen
-    if max_seqlen is not None:
-        metadata_cache["max_seqlen"] = max_seqlen
-
-    return NestedTensor(
-        values,
-        offsets,
-        _ragged_idx=ragged_idx,
-        _metadata_cache=metadata_cache,
-    )
-
-
-@register_jagged_func(
-    torch.ops.aten._nested_view_from_jagged.default,
-    "values: t, offsets: t, dummy: jt_all, lengths: t?, ragged_idx: any?, min_seqlen: t?, max_seqlen: t?",
-)
-def _nested_view_from_jagged_default(func, *args, **kwargs):
-    _, new_kwargs = normalize_function(  # type: ignore[misc]
-        func, args=args, kwargs=kwargs, normalize_to_only_use_kwargs=True
-    )
-
-    values, offsets, lengths = (
-        new_kwargs["input"],
-        new_kwargs["offsets"],
-        new_kwargs["lengths"],
-    )
-    ragged_idx = new_kwargs["ragged_idx"]
-    min_seqlen = new_kwargs["min_seqlen"]
-    max_seqlen = new_kwargs["max_seqlen"]
-    metadata_cache = {}
-    if min_seqlen is not None:
-        metadata_cache["min_seqlen"] = min_seqlen
-    if max_seqlen is not None:
-        metadata_cache["max_seqlen"] = max_seqlen
-
-    return NestedTensor(
-        values,
-        offsets,
-        lengths=lengths,
-        _ragged_idx=ragged_idx,
-        _metadata_cache=metadata_cache,
-    )
-
-
 @register_jagged_func(torch.ops.aten._nested_get_offsets.default, "self: jt_all")
 def _nested_get_offsets(func, *args, **kwargs):
     _, new_kwargs = normalize_function(  # type: ignore[misc]
@@ -2347,15 +2257,99 @@ def flex_njt_backward(
     return (njt_q_grad, njt_k_grad, njt_v_grad, score_mod_other_buffer_grads)
 
 
-# Make the dummy available on the C++ side.
-@register_jagged_func(torch.ops.aten._nested_get_jagged_dummy.default, "self: any")
-def _nested_get_jagged_dummy(func, *args, **kwargs):
-    from torch.nested._internal.nested_tensor import _nt_view_dummy
+from torch.nested._internal.cached_tensor import (
+    register_cached_tensor_func,
+)
 
-    return _nt_view_dummy()
+# When we use [ CacheTensor open registry ], we cannot rely on NestedTensor's
+# torch function anymore to enable maybe_enable_thunkify. All functions
+# registered to register_cached_tensor_func must be first wrapped with this
+# decorator.
+def maybe_enable_thunkify(f):
+    import functools
+
+    from torch.fx.experimental.proxy_tensor import maybe_enable_thunkify
+
+    @functools.wraps(f)
+    def fn(*args, **kwargs):
+        with maybe_enable_thunkify():
+            return f(*args, **kwargs)
+
+    return fn
+
+
+# See Note: [ CacheTensor open registry ]
+@register_cached_tensor_func(torch.ops.aten._nested_from_padded_tensor.default)
+@maybe_enable_thunkify
+def _nested_from_padded_tensor_default(func, *args, **kwargs):
+    # padded: t, metadata: t, ragged_idx: any?, sum_S: any?
+    from torch.nested._internal.nested_tensor import NestedTensor
+
+    _, new_kwargs = normalize_function(  # type: ignore[misc]
+        func, args=args, kwargs=kwargs, normalize_to_only_use_kwargs=True
+    )
+
+    if new_kwargs["ragged_idx"] != 1:
+        raise RuntimeError(
+            "_nested_from_padded_tensor(): only ragged_idx=1 supported for jagged layout"
+        )
+
+    padded, offsets = new_kwargs["padded"], new_kwargs["offsets"]
+
+    # non-3D padded is not supported by the underlying FBGEMM kernel so do shape gymnastics
+    padded_shape = padded.shape
+    if padded.dim() > 3:
+        padded = padded.flatten(start_dim=2)
+    elif padded.dim() < 3:
+        padded = padded.unsqueeze(-1)
+
+    # NB: The CUDA kernel for padded dense -> jagged conversion does not support
+    # integer / bool types; work around this by casting to half.
+    is_bool = padded.dtype is torch.bool
+    if is_bool and padded.is_cuda:
+        padded = padded.to(torch.half)
+    values = torch.ops.aten._padded_dense_to_jagged_forward(
+        padded, [offsets], new_kwargs["sum_S"]
+    )
+    if is_bool and values.is_cuda:
+        values = values.to(torch.bool)
+
+    # shape gymnastics part 2
+    if len(padded_shape) > 3:
+        values = values.unflatten(-1, padded_shape[2:])
+    elif len(padded_shape) < 3:
+        values = values.squeeze(-1)
+
+    return NestedTensor(
+        values,
+        new_kwargs["metadata"],
+        _ragged_idx=new_kwargs["ragged_idx"],
+    )
+
+
+@register_cached_tensor_func(torch.ops.aten._nested_view_from_jagged.default)
+@maybe_enable_thunkify
+def _nested_view_from_jagged_default(func, *args, **kwargs):
+    # values: t, metadata: t, ragged_idx: any?
+    from torch.nested._internal.nested_tensor import NestedTensor
+
+    _, new_kwargs = normalize_function(  # type: ignore[misc]
+        func, args=args, kwargs=kwargs, normalize_to_only_use_kwargs=True
+    )
+    return NestedTensor(
+        new_kwargs["input"],
+        new_kwargs["metadata"],
+        _ragged_idx=new_kwargs["ragged_idx"],
+    )
+
+
+# Make the dummy available on the C++ side.
+@register_jagged_func(torch.ops.aten._nested_get_jagged_metadata.default, "self: any")
+def _nested_get_jagged_dummy(func, *args, **kwargs):
+    return args[0]._metadata
 
 
 with torch.library._scoped_library("aten", "IMPL") as aten:
-    aten.impl("_nested_get_jagged_dummy", _nested_get_jagged_dummy, "CPU")
-    aten.impl("_nested_get_jagged_dummy", _nested_get_jagged_dummy, "CUDA")
-    aten.impl("_nested_get_jagged_dummy", _nested_get_jagged_dummy, "Meta")
+    aten.impl("_nested_get_jagged_metadata", _nested_get_jagged_dummy, "CPU")
+    aten.impl("_nested_get_jagged_metadata", _nested_get_jagged_dummy, "CUDA")
+    aten.impl("_nested_get_jagged_metadata", _nested_get_jagged_dummy, "Meta")
